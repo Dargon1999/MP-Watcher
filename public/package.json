@@ -1,0 +1,11 @@
+{
+  "name": "mp-watcher",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "dependencies": {
+    "firebase-admin": "^12.0.0",
+    "node-fetch": "^3.3.2",
+    "jsdom": "^24.0.0"
+  }
+}

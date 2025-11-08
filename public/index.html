@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>МП → Discord</title>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <style>
+    :root{--bg:#1a1a2e;--card:#16213e;--accent:#00d4ff;--text:#e0e0e0}
+    body{margin:0;font-family:Segoe UI;background:var(--bg);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .card{background:var(--card);padding:2rem;border-radius:16px;box-shadow:0 10px 30px rgba(0,212,255,.2);width:90%;max-width:500px;text-align:center;border:1px solid rgba(0,212,255,.3)}
+    h1{margin:0 0 1rem;color:var(--accent);font-size:2rem}
+    .status{margin:1rem 0;font-size:1.1rem}
+    .log{background:rgba(0,0,0,.3);padding:1rem;border-radius:8px;max-height:300px;overflow-y:auto;text-align:left;font-family:monospace;font-size:.9rem;margin-top:1rem}
+    .btn{background:var(--accent);color:#000;border:none;padding:12px 24px;border-radius:8px;font-weight:bold;cursor:pointer;margin:0 .5rem 1rem;transition:.3s}
+    .btn:hover{transform:scale(1.05)}
+    .online{color:#0f0}.offline{color:#f66}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>МП → Discord</h1>
+    <div class="status">Статус: <span id="status" class="offline">Оффлайн</span></div>
+    <div>
+      <button class="btn" onclick="checkNow()">Проверить сейчас</button>
+      <button class="btn" onclick="resetDB()" style="background:#ff5555">Сбросить базу</button>
+    </div>
+    <div class="log" id="log">Инициализация...</div>
+  </div>
+
+  <script>
+    // === ТВОИ НАСТРОЙКИ ===
+    const firebaseConfig = {
+      apiKey: "AIzaSyAO9HHeTDY7wPvIRopUjFyyVsgbcKfNhKw",
+      authDomain: "mpgta5rp-fb175.firebaseapp.com",
+      projectId: "mpgta5rp-fb175",
+      storageBucket: "mpgta5rp-fb175.firebasestorage.app",
+      messagingSenderId: "1097127418869",
+      appId: "1:1097127418869:web:1dba0c31e1422763b45ebc",
+      measurementId: "G-499HG9VESJ",
+      databaseURL: "https://mpgta5rp-fb175-default-rtdb.firebaseio.com"
+    };
+
+    const WEBHOOK = "https://discord.com/api/webhooks/1434674896058974389/N6S8CGFexsPXZOznRh2VXDRZWtJwJDSySW1P1swEI6UxVE-QRHNNCAs5JpcLmWLQOJOr";
+    const ROLES = "<@&860246345343959050> <@&1018540333547663401>";
+    const FORUM = "https://forum.gta5rp.com/forums/meroprijatija-servera.425/";
+    const BASE_URL = "https://forum.gta5rp.com";
+    const CHECK_INTERVAL = 30 * 60 * 1000; // 1 час
+    // =======================
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const sentRef = db.ref("sent_topics");
+
+    const logEl = document.getElementById("log");
+    const statusEl = document.getElementById("status");
+
+    let sentCache = {};
+
+    function log(msg, type = "info") {
+      const t = new Date().toLocaleTimeString();
+      const color = type === "error" ? "#ff5555" : type === "success" ? "#00ff99" : "#ccc";
+      logEl.innerHTML += `<div style="color:${color}">[${t}] ${msg}</div>`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function extractDate(title) {
+      const m = title.match(/(\d{1,2})[.:](\d{1,2})[.:](\d{4}).*?(\d{1,2}):(\d{2})/);
+      if (m) {
+        const [_, d, mth, y, h, min] = m;
+        return `${d.padStart(2, '0')}.${mth.padStart(2, '0')}.${y} в ${h.padStart(2, '0')}:${min}`;
+      }
+      return "Дата не указана";
+    }
+
+    function parseDate(dateStr) {
+      const m = dateStr.match(/(\d{2})\.(\d{2})\.(\d{4}) в (\d{2}):(\d{2})/);
+      if (m) {
+        const [_, d, mth, y, h, min] = m;
+        return new Date(y, mth - 1, d, h, min);
+      }
+      return null;
+    }
+
+    async function loadSentCache() {
+      const snap = await sentRef.once("value");
+      sentCache = snap.val() || {};
+    }
+
+    async function sendToDiscord(topic) {
+      if (sentCache[topic.id]) return;
+      sentCache[topic.id] = true;
+      const text = `${ROLES}\n**${topic.title}**\n${topic.date}\n${topic.url}`;
+      try {
+        await fetch(WEBHOOK, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: text })
+        });
+        await sentRef.child(topic.id).set(true);
+        log(`✅ Отправлено: ${topic.title}`, "success");
+      } catch (e) {
+        log(`❌ Ошибка Discord: ${e.message}`, "error");
+      }
+    }
+
+    async function checkForum() {
+      log("🔍 Проверяю форум...");
+      try {
+        // --- Используем стабильный прокси API ---
+        const proxy = "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(FORUM);
+        const res = await fetch(proxy);
+        if (!res.ok) throw new Error("Ошибка прокси или форум недоступен");
+        const contents = await res.text();
+
+        const doc = new DOMParser().parseFromString(contents, "text/html");
+        const topics = [];
+        doc.querySelectorAll(".structItem").forEach(el => {
+          const a = el.querySelector(".structItem-title a:last-child");
+          if (!a) return;
+          let href = a.getAttribute("href");
+          if (!href.startsWith("http")) href = BASE_URL + href;
+          const idParts = href.split('.');
+          const id = idParts[idParts.length - 1].split('/')[0];
+          const title = a.textContent.trim();
+          if (title.includes("МП") || title.includes("ГМП")) {
+            const dateStr = extractDate(title);
+            const dateObj = parseDate(dateStr);
+            topics.push({ id, title, url: href, date: dateStr, dateObj });
+          }
+        });
+
+        topics.sort((a, b) => a.dateObj - b.dateObj);
+        const now = new Date();
+
+        let newCnt = 0;
+        for (const t of topics) {
+          if (!t.dateObj || t.dateObj < now || sentCache[t.id]) continue;
+          await sendToDiscord(t);
+          newCnt++;
+          await new Promise(r => setTimeout(r, 1000));
+        }
+
+        if (newCnt === 0) log("✔ Новых МП нет");
+      } catch (e) {
+        log(`❌ Ошибка: ${e.message}`, "error");
+      }
+    }
+
+    window.checkNow = async () => {
+      statusEl.textContent = "Работаю...";
+      await loadSentCache();
+      await checkForum();
+      statusEl.textContent = "Онлайн";
+    };
+
+    window.resetDB = async () => {
+      if (confirm("Удалить всю базу отправленных МП?")) {
+        await sentRef.remove();
+        sentCache = {};
+        log("🗑 База сброшена");
+      }
+    };
+
+    window.onload = async () => {
+      statusEl.textContent = "Онлайн";
+      log("🚀 Бот запущен (автопроверка раз в час)");
+      await loadSentCache();
+      await checkForum();
+      setInterval(async () => {
+        await loadSentCache();
+        await checkForum();
+      }, CHECK_INTERVAL);
+    };
+  </script>
+</body>
+</html>
